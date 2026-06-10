@@ -1,0 +1,160 @@
+# Disaster Recovery Runbook
+## AWS Capstone Project
+**Date:** June 2026  
+**Author:** Your Full Name  
+**Version:** 1.0
+
+---
+
+## Overview
+This runbook documents the step-by-step procedure to execute 
+a failover from the primary region (us-east-1) to the disaster 
+recovery region (us-west-2) in the event of a regional outage.
+
+**RTO Target:** 30 minutes  
+**RPO Target:** 5 minutes
+
+---
+
+## Pre-Requisites
+Before executing this runbook ensure:
+- [ ] AWS Console access is available
+- [ ] You have admin permissions on the AWS account
+- [ ] us-west-2 VPC and subnets are in place
+- [ ] DR VPC peering connection is active
+- [ ] RDS read replica exists in us-west-2
+
+---
+
+## Disaster Recovery Steps
+
+### Phase 1 — Declare Incident (5 minutes)
+
+**Step 1 — Confirm Regional Outage**
+- Go to https://health.aws.amazon.com
+- Confirm us-east-1 is showing an active incident
+- Check AWS Status Twitter/X for confirmation
+- Do not failover for minor issues — only full regional outages
+
+**Step 2 — Notify Stakeholders**
+- Alert your team that failover is being initiated
+- Expected downtime: 15-30 minutes
+- Document the time failover started
+
+---
+
+### Phase 2 — Database Failover (10 minutes)
+
+**Step 3 — Promote RDS Read Replica**
+- Log into AWS Console
+- Switch region to **us-west-2**
+- Go to **RDS → Databases**
+- Select the read replica in us-west-2
+- Click **Actions → Promote**
+- Confirm promotion
+- Wait for status to change to **Available**
+- Copy the new **Endpoint URL**
+
+**Step 4 — Update Application Database Connection**
+- Note the new RDS endpoint from Step 3
+- This will be used when configuring the DR application servers
+
+---
+
+### Phase 3 — Compute Failover (10 minutes)
+
+**Step 5 — Launch EC2 Instances in us-west-2**
+- Go to **EC2 → Launch Instance** in us-west-2
+- Use the same configuration as main-vpc servers:
+  - AMI: Amazon Linux 2023
+  - Instance type: t2.micro
+  - VPC: dr-vpc
+  - Subnet: dr-public-subnet-2a
+  - Security group: create equivalent of webserver-sg
+- Launch minimum 2 instances
+
+**Step 6 — Install Web Application**
+- Connect to each new instance via SSM Session Manager
+- Run these commands:
+```bash
+sudo yum install -y httpd
+sudo systemctl start httpd
+sudo systemctl enable httpd
+```
+- Update application configuration to point to new 
+  RDS endpoint from Step 3
+
+**Step 7 — Create Load Balancer in us-west-2**
+- Go to **EC2 → Load Balancers**
+- Create new Application Load Balancer in dr-vpc
+- Name: dr-alb
+- Add both DR public subnets
+- Create target group and register new EC2 instances
+- Wait for instances to show healthy
+
+---
+
+### Phase 4 — DNS Cutover (5 minutes)
+
+**Step 8 — Update DNS**
+- Go to **Route 53** (or your DNS provider)
+- Update the A record to point to the DR load balancer DNS name
+- Set TTL to 60 seconds for fast propagation
+- Wait 1-2 minutes for DNS to propagate globally
+
+**Step 9 — Verify Application is Working**
+- Open a browser and navigate to your application URL
+- Confirm the application loads correctly
+- Test key functionality (login, data retrieval etc.)
+- Confirm data integrity from the promoted RDS instance
+
+---
+
+### Phase 5 — Post-Failover (5 minutes)
+
+**Step 10 — Monitor and Confirm Stability**
+- Monitor CloudWatch metrics for error rates
+- Check ALB target group health checks
+- Confirm all instances showing healthy
+- Monitor RDS metrics in us-west-2
+
+**Step 11 — Document the Incident**
+Record the following:
+- Time incident declared
+- Time failover initiated
+- Time failover completed
+- Actual RTO achieved
+- Any data loss (RPO achieved)
+- Issues encountered during failover
+
+---
+
+## Failback Procedure (After us-east-1 Recovers)
+
+**Step 1** — Confirm us-east-1 is fully recovered  
+**Step 2** — Set up new RDS read replica from us-west-2 
+promoted instance back to us-east-1  
+**Step 3** — Wait for replication to catch up  
+**Step 4** — Switch DNS back to us-east-1 load balancer  
+**Step 5** — Verify application working in us-east-1  
+**Step 6** — Decommission DR resources to stop billing  
+
+---
+
+## Key Contacts
+| Role | Contact |
+|---|---|
+| Cloud Engineer | Your Name |
+| AWS Account ID | 502976064775 |
+| Primary Region | us-east-1 |
+| DR Region | us-west-2 |
+
+---
+
+## Architecture Reference
+| Component | Primary (us-east-1) | DR (us-west-2) |
+|---|---|---|
+| VPC | main-vpc 10.0.0.0/16 | dr-vpc 10.1.0.0/16 |
+| Load Balancer | main-alb | dr-alb (created during failover) |
+| Database | main-database | Read replica promoted |
+| EC2 | main-asg instances | Manually launched during failover |
